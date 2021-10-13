@@ -4,6 +4,7 @@ The code is written in MATLAB and requires the use of the following toolboxes (n
 * Parallel Computing Toolbox.
 * GPstuff package (download/install instructions at: https://github.com/gpstuff-dev/gpstuff)
 
+Note that I've switched off the parallel components, i.e. all 'parfor' loops are serial 'for' loops, as we obtain no speed when solving these small test systems here. 
 
 ## Files
 

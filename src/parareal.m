@@ -73,7 +73,7 @@ for k = 1:N
     % solve with the fine solver (in parallel)
     dim_indices = (n*(k-1)+1:n*k);        %current indices
     dim_indices_next = ((n*k)+1:n*(k+1)); %next indices
-    for i = I:N
+    parfor i = I:N
         [~,u_f] = RK((t(i):dt:t_shift(i)),u(i,dim_indices),f,F);
         uF(i+1,dim_indices) = u_f(end,:);    %save the solution from final time step
     end

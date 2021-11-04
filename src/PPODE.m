@@ -5,7 +5,7 @@ function [t,u,err,k,gp,xx,DD] = PPODE(f,auto,tspan,u0,N,Ng,Nf,epsilon,F,G,K,like
 
 %Inputs:
 % f:           Function handle for function to be solved (i.e. f = @(t,u)([u(1);u(2)])
-% auto:        Logical determining if system "f" is autonomous (1) or non-autonomous (0) 
+% auto:        Logical stating whether system "f" is autonomous (1) or non-autonomous (0) 
 % tspan:       Time interval over which to integrate (i.e. [0,12])
 % u0:          Initial conditions at tspan(1) (i.e. [0,1])
 % N:           Number of 'proccesors' (temporal sub-intervals) (i.e. N = 40)
@@ -14,8 +14,8 @@ function [t,u,err,k,gp,xx,DD] = PPODE(f,auto,tspan,u0,N,Ng,Nf,epsilon,F,G,K,like
 % epsilon:     Error tolerance (i.e. 10^(-10))
 % F:           Selected fine solver (i.e. 'RK4') 
 % G:           Selected coarse solver (i.e. 'RK1') 
-% K:           Kernel function handle for GP (i.e. @covSEiso)
-% like:        Likelihood function handle for GP (i.e. @likGauss) 
+% K:           Cell array of covariance kernel structures for GP (i.e. {gpcf_constant(),gpcf_sexp('lengthScale',1, 'magnSigma2',1)}, one for each output of GP)
+% like:        Structure for likelihood in GP (i.e. lik_gaussian()) 
 % varargin     Variable inputs x and D can either be both omitted or both be present.
 % x:           Vector of previously known initial value inputs that can be used to train GP
 % D:           Vector of previously known data on (F-G)(x) used to train GP
@@ -68,8 +68,10 @@ uG(1,:) = u(1,:);
 uF(1,:) = u(1,:);
 
 %initialise a GP for each output in a cell array (with the likelihood, covariance function and noise added to covariance function)
-gp_init = gp_set('lik', like, 'cf', K,'jitterSigma2',10*eps);
-gp = cell(n,1);  gp(:) = {gp_init};
+gp = cell(n,1);
+for i = 1:n
+   gp{i} = gp_set('lik', like, 'cf', K{i},'jitterSigma2',1e-14);
+end
 opts = optimset('TolFun',1e-10,'TolX',1e-10,'display','off');  %set options for GP optimisation function (gp_optim)
     
 % MAIN ALGORITHM
@@ -97,7 +99,7 @@ for k = 1:N
     % values
     dim_indices = (n*(k-1)+1:n*k);        %current iteration indices
     dim_indices_next = ((n*k)+1:n*(k+1)); %next iteration indices
-    for i = I:N
+    parfor i = I:N
         [~,temp] = RK((t(i):dt:t_shift(i)),u(i,dim_indices),f,F);
         uF(i+1,dim_indices) = temp(end,:);    %save the solution from final time step
     end
@@ -139,6 +141,13 @@ for k = 1:N
         
         % 'best' initial value where we will evaluate the posterior
         x_star = u(i,dim_indices_next);
+        
+        % error catch
+        a = 0;
+        if isempty(x_star) || ~isreal(x_star) || ~all(isfinite(x_star))
+            a = NaN; 
+            break
+        end
         
         %query the GP using test input x_star
         post_mean = zeros(size(x_star));

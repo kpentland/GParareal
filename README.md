@@ -4,7 +4,7 @@ This repository contains sample code for the pre-print by Pentland, Tamborrino, 
 
 The code is written in MATLAB and requires the use of the following toolboxes (noting there may be dependencies I have overlooked):
 * Parallel Computing Toolbox.
-* GPstuff package (download/install instructions at: https://github.com/gpstuff-dev/gpstuff)
+* GPstuff package (download/install instructions at: https://github.com/gpstuff-dev/gpstuff).
 
 
 ## Authors

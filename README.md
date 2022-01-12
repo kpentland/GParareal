@@ -8,8 +8,11 @@ The code is written in MATLAB and requires the use of the following toolboxes (n
 
 ## Files
 
-*src*: contains source code for the project.
-
+*GParareal.m*: function file containining the GParareal algorithm. 
+*parareal.m*: function file containining the parareal algorithm.
+*RK.m*: function file containining 1st, 2nd, 3rd, and 4th order Runge-Kutta methods.
+*FitzHughNagumo*: folder containing a test run of the three functions above on the FitzHugh-Nagumo model (open the 'Test_FHN.m script). 
+*Rossler*: folder containing a test run of the three functions above on the Rossler system (open the 'Test_rossler.m script).
 
 ## Authors
 
@@ -18,5 +21,3 @@ The code is written in MATLAB and requires the use of the following toolboxes (n
 * Tim Sullivan - Mathematics Institute, University of Warwick
 * James Buchanan - Cuham Centre for Fusion Energy, Abingdon, Oxfordshire
 * Lynton Appel - Cuham Centre for Fusion Energy, Abingdon, Oxfordshire
-
-

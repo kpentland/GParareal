@@ -1,0 +1,10 @@
+Opening log file:  /home/rawsys/matdfk/java.log.6663
+
+ans =
+
+    '/scrtp/avon/eb/software/MVAPICH2/2.3.6-iccifort-2019.5.281/lib/libmpi.so'
+
+Starting parallel pool (parpool) ...
+Connected to the parallel pool (number of workers: 512).
+GParareal iteration number (out of 512): 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 Done. 
+GParareal is executed in 20978.78 seconds on   512.00 cores. 

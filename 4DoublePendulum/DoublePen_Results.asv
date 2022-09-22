@@ -1,0 +1,882 @@
+%% Double pendulum
+%Here we solve the double pendulum system (chaotic). To run the 
+%code, follow the description and instructions in each section.
+
+%WARNING: some of the code here is designed to run on a HPC system with at least 
+%512 compute cores and high RAM storage. There will be a note in that section for
+%what to do in this case - note that that results may differ between machines
+%and parallel speedup may not be realised. 
+
+%% Plots: Figure
+%
+
+
+clear; close all; clc;
+
+% INPUTS
+%function handle for ODE
+f = @(t,u)([u(2);...
+    (-1/(2 - cos(u(1)-u(3))^2))*((u(2)^2)*cos(u(1)-u(3))*sin(u(1)-u(3)) + (u(4)^2)*sin(u(1)-u(3)) + 2*sin(u(1)) - cos(u(1)-u(3))*sin(u(3)) );...
+    u(4);...
+    (-1/(2 - cos(u(1)-u(3))^2))*(-2*(u(2)^2)*sin(u(1)-u(3)) - (u(4)^2)*sin(u(1)-u(3))*cos(u(1)-u(3)) - 2*cos(u(1)-u(3))*sin(u(1)) + 2*sin(u(3)) )]);    
+
+tspan = [0,80];                      %time interval
+u0 = [2,0,0.5,0];                    %intial conditions (good)
+N = 32;                              %no. of time sub-intervals steps
+Ng = 3072;                           %no. of coarse steps
+Nf = Ng*70;                           %no. of fine steps 
+epsilon = 10^(-6);                   %error tolerance 
+G = 'RK1';                           %coarse solver
+F = 'RK8';                           %fine solver
+
+
+%fine solve
+n = length(u0);                         % no. of ODE output dimensions
+dt = (tspan(2)-tspan(1))/Nf;            % size of fine time step
+t_fine = (tspan(1):dt:tspan(end));      % fine time step mesh
+[~,F_sol] = RK(t_fine,u0,f,F);          % fine solution
+
+% Gaussian Process emulator inputs
+kernel = struct('func',@isoSE_cov,'theta',[1,1],'jitter',1e-12);
+
+%solve FHN model using GParareal and parareal
+[t,u,err,k,gp_kers,xx,DD,T] = GParareal(f,tspan,u0,N,Ng,Nf,epsilon,F,G,kernel);
+[~,u_p,err_para,k_para,slices] = parareal(f,tspan,u0,N,Ng,Nf,epsilon,F,G);
+
+
+%%PLOTS
+% Fig 1: PPODE/parareal solutions vs. fine
+
+%integrate the ODE using initial values found by PPODE and parareal
+fine_trajecs1 = cell(N,1);
+fine_trajecs2 = cell(N,1);
+for i = 1:N
+    [~,temp1] = RK((t(i):dt:t(i+1)),u(i,(n*(k-1)+1:n*k)),f,F);
+    [~,temp2] = RK((t(i):dt:t(i+1)),u_p(i,(n*(k_para-1)+1:n*k_para)),f,F);
+    if i < N
+    fine_trajecs1{i,1} = temp1(1:end-1,:);                 
+    fine_trajecs2{i,1} = temp2(1:end-1,:);                 
+    else
+    fine_trajecs1{i,1} = temp1;                 
+    fine_trajecs2{i,1} = temp2;                 
+    end
+end
+u_prob = vertcat(fine_trajecs1{:,1});            % probabilistic sol
+u_para = vertcat(fine_trajecs2{:,1});            % parareal sol
+
+
+% plot the solutions
+figure(1)
+hold on
+plot(F_sol(:,1),F_sol(:,3),'k')
+plot(u_para((1:(Nf/N):end),1),u_para((1:(Nf/N):end),3),'*r')
+plot(u_prob((1:(Nf/N):end),1),u_prob((1:(Nf/N):end),3),'ob')
+xlabel('$x$','Interpreter','latex'); ylabel('$y$','Interpreter','latex');
+grid on; box on;
+%axis([0 4 0 5])
+%xticks((0:0.5:4)); yticks((0:0.5:5));
+legend({'Fine','Parareal','GParareal'},'Interpreter','latex','location','northeast')
+hold off
+
+
+% plot the solutions
+figure(1)
+subplot(2,1,1)
+hold on
+plot(t_fine,F_sol(:,1),'k')
+plot(t_fine((1:(Nf/N):end)),u_prob((1:(Nf/N):end),1),'ob')
+plot(t_fine((1:(Nf/N):end)),u_para((1:(Nf/N):end),1),'*r')
+plot([tspan(1), tspan(2)],[pi pi],'--k')
+plot([tspan(1), tspan(2)],[-pi -pi],'--k')
+hold off
+xlim(tspan);
+ylim([-pi-0.5 pi+0.5]); yticks((-pi:(pi/2):pi)); yticklabels({'-\pi','','0','','\pi'})
+set(gca,'xticklabels',[])
+ylabel('$u_1(t)$','interpreter','latex');
+box on; grid on;
+
+subplot(2,1,2)
+hold on
+plot(t_fine,F_sol(:,3),'k')
+plot(t_fine((1:(Nf/N):end)),u_prob((1:(Nf/N):end),3),'ob')
+plot(t_fine((1:(Nf/N):end)),u_para((1:(Nf/N):end),3),'*r')
+plot([tspan(1), tspan(2)],[pi pi],'--k')
+plot([tspan(1), tspan(2)],[-pi -pi],'--k')
+plot([tspan(1), tspan(2)],[-3*pi -3*pi],'--k')
+plot([tspan(1), tspan(2)],[-5*pi -5*pi],'--k')
+plot([tspan(1), tspan(2)],[-7*pi -7*pi],'--k')
+hold off
+xlim(tspan);
+ylim([-7*pi-1.5 pi+1.5]); yticks((-7*pi:pi:pi)); yticklabels({'-7\pi','','-5\pi','','-3\pi','','-\pi','','\pi'})
+xlabel('$t$','interpreter','latex'); ylabel('$u_2(t)$','interpreter','latex');
+box on; grid on;
+
+legend({'Fine','GParareal','Parareal'},'Interpreter','latex','numcolumns',3,'location','southwest')
+hold off
+
+
+
+%Fig 2: Convergence plot (PPODE vs. parareal)
+
+%calculate maximum error during each iteration (for each algorithm)
+err(cumsum(cumsum(err~=0)) == 1) = 0; err(end,end) = eps; errs = max(err,[],1); 
+err_para(cumsum(cumsum(err_para~=0)) == 1) = 0; err_para(end,end) = eps; errs_para = max(err_para,[],1); 
+
+figure(2)
+hold on
+plot((1:k_para),errs_para(1:k_para),'-or','LineWidth',1.2);
+plot((1:k),errs(1:k),'-ob','LineWidth',1.2);
+yline(epsilon,'--k')
+xlabel('$k$ (Iterations)','Interpreter','latex'); ylabel('Max. Absolute Error','Interpreter','latex');
+set(gca,'yscale','log')
+grid on; box on;
+xlim([1,max([k,k_para,5])]); ylim([10^(-8),10^(4)]);
+xticks((1:max([k,k_para]))); %yticks((0:0.5:5));
+legend('northeast',{'Parareal','GParareal','Tolerance'})
+hold off
+
+%Fig 3: Error plot (PPODE/parareal vs. fine solution)
+
+%calculate absolute error at each time step (for each algorithm)
+prob_error1 = abs(F_sol(:,1) - u_prob(:,1)); prob_error1(prob_error1==0) = 10^(-40);
+para_error1 = abs(F_sol(:,1) - u_para(:,1)); para_error1(para_error1==0) = 10^(-40);
+
+prob_error2 = abs(F_sol(:,3) - u_prob(:,3)); prob_error2(prob_error2==0) = 10^(-40);
+para_error2 = abs(F_sol(:,3) - u_para(:,3)); para_error2(para_error2==0) = 10^(-40);
+
+figure(3)
+subplot(2,1,1)
+hold on
+plot(t_fine,para_error1,'r','LineWidth',1.2)
+plot(t_fine,prob_error1,'b','LineWidth',1.2)
+hold off
+set(gca,'yscale','log')
+yticks(10.^[-15,-10,-5,0])
+xlim(tspan)
+ylim([10^(-15) 10^(0)]);
+set(gca,'xticklabels',[])
+ylabel('$u_1$ error','interpreter','latex');
+box on; grid on;
+legend({'Fine - Parareal','Fine - GParareal'},'interpreter','latex','location','northwest','numcolumns',2)
+
+subplot(2,1,2)
+hold on
+plot(t_fine,para_error2,'r','LineWidth',1.2)
+plot(t_fine,prob_error2,'b','LineWidth',1.2)
+hold off
+set(gca,'yscale','log')
+yticks(10.^[-15,-10,-5,0])
+xlim(tspan)
+ylim([10^(-15) 10^(0)]);
+xlabel('$t$','interpreter','latex'); ylabel('$u_2$ error','interpreter','latex');
+box on; grid on;
+
+
+% plot the solutions
+figure(5)
+hold on
+scatter([0 0],[0 0],10,'filled','k')
+plot(sin(F_sol(:,1)),-cos(F_sol(:,1)),'k')
+plot(sin(u_para((1:(Nf/N):end),1)),-cos(u_para((1:(Nf/N):end),1)),'*r')
+plot(sin(u_prob((1:(Nf/N):end),1)),-cos(u_prob((1:(Nf/N):end),1)),'ob')
+plot(sin(F_sol(:,1)) + sin(F_sol(:,3)),-cos(F_sol(:,1))-cos(F_sol(:,3)),'k')
+plot(sin(u_para((1:(Nf/N):end),1)) + sin(u_para((1:(Nf/N):end),3)),-cos(u_para((1:(Nf/N):end),1))-cos(u_para((1:(Nf/N):end),3)),'*r')
+plot(sin(u_prob((1:(Nf/N):end),1)) + sin(u_prob((1:(Nf/N):end),3)),-cos(u_prob((1:(Nf/N):end),1))-cos(u_prob((1:(Nf/N):end),3)),'ob')
+% xlabel('$x$','Interpreter','latex'); ylabel('$y$','Interpreter','latex');
+grid on; box on;
+axis([-2 2 -2 2])
+%xticks((0:0.5:4)); yticks((0:0.5:5));
+% legend({'Fine','Parareal','PPODE'},'Interpreter','latex','location','northeast')
+hold off
+
+
+
+% %% SECTION FIVE: Solve system using legacy data
+% %Here we solve the system for an IC given legacy data from solving for
+% % an alternate IC. Plots are described below. To test, run this section. 
+% 
+% % clear; close all; clc;
+% 
+% % INPUTS
+% %function handle for ODE
+% f = @(t,u)([u(2);...
+%     (-1/(2 - cos(u(1)-u(3))^2))*((u(2)^2)*cos(u(1)-u(3))*sin(u(1)-u(3)) + (u(4)^2)*sin(u(1)-u(3)) + 2*sin(u(1)) - cos(u(1)-u(3))*sin(u(3)) );...
+%     u(4);...
+%     (-1/(2 - cos(u(1)-u(3))^2))*(-2*(u(2)^2)*sin(u(1)-u(3)) - (u(4)^2)*sin(u(1)-u(3))*cos(u(1)-u(3)) - 2*cos(u(1)-u(3))*sin(u(1)) + 2*sin(u(3)) )]);    
+% tspan = [0,100];                       %time interval
+% u0 = [pi/2,0,-pi/8,0];                       %intial conditions
+% N = 50;                               %no. of time sub-intervals steps
+% Ng = 10000;                             %no. of coarse steps
+% Nf = 10000;                            %no. of fine steps
+% epsilon = 10^(-6);                     %error tolerance 
+% G = 'RK1';                             %coarse solver
+% F = 'RK4';                             %fine solver
+% 
+% % Gaussian Process prior inputs
+% K = cell(4,1);                                          %covariance kernel structure required for each output
+% K{1} = gpcf_sexp('lengthScale',1, 'magnSigma2',1);      %square exponential kernel (isotropic)
+% K{2} = gpcf_sexp('lengthScale',1, 'magnSigma2',1);      %square exponential kernel (isotropic)
+% K{3} = gpcf_sexp('lengthScale',1, 'magnSigma2',1);      %square exponential kernel (isotropic)
+% K{4} = gpcf_sexp('lengthScale',1, 'magnSigma2',1);      %square exponential kernel (isotropic)
+% like = lik_gaussian();                                  %Gaussian likelihood with prior scale parameter
+% 
+% %fine time step and mesh (n = no. of dimensions)
+% n = length(u0);
+% dt = (tspan(2)-tspan(1))/Nf;
+% t_fine = (tspan(1):dt:tspan(end));
+% 
+% 
+% 
+% %solve problem with original IC
+% % [t,~,~,~,~,xx,DD] = PPODE(f,tspan,u0,N,Ng,Nf,epsilon,F,G,K,like);
+% 
+% %solve with alternate IC (using perviously obtained data and without)
+% u0_new = [pi/2,0,pi/4,0];
+% 
+% %solve problem using without prior data
+% [~,u1,err1,k,~,~,~] = PPODE(f,tspan,u0_new,N,Ng,Nf,epsilon,F,G,K,like);
+% %solve problem using previously obtained data
+% [~,u2,err2,k2,~,~,~] = PPODE(f,tspan,u0_new,N,Ng,Nf,epsilon,F,G,K,like,xx,DD);
+% %solve using fine solver and parareal
+% [~,F_sol2] = RK(t_fine,u0_new,f,F);                                                            
+% [~,u_p,err_para,k_para] = parareal(f,tspan,u0_new,N,Ng,Nf,epsilon,F,G);                
+%  
+% 
+% % use the ICs found by each algorithm to integrate in parallel
+% 
+% fine_trajecs3 = cell(N,1);
+% fine_trajecs4 = cell(N,1);
+% fine_trajecs5 = cell(N,1);
+% for i = 1:N
+%     [~,temp3] = RK((t(i):dt:t(i+1)),u1(i,(n*(k-1)+1:n*k)),f,F);
+%     [~,temp4] = RK((t(i):dt:t(i+1)),u2(i,(n*(k2-1)+1:n*k2)),f,F);
+%     [~,temp5] = RK((t(i):dt:t(i+1)),u_p(i,(n*(k_para-1)+1:n*k_para)),f,F);
+%     if i < N
+%         fine_trajecs3{i,1} = temp3(1:end-1,:);
+%         fine_trajecs4{i,1} = temp4(1:end-1,:);
+%         fine_trajecs5{i,1} = temp5(1:end-1,:);
+%     else
+%         fine_trajecs3{i,1} = temp3;
+%         fine_trajecs4{i,1} = temp4;
+%         fine_trajecs5{i,1} = temp5;
+%     end
+% end
+% u_prob2 = vertcat(fine_trajecs3{:,1});            % prob solution (new IC - without data)
+% u_prob3 = vertcat(fine_trajecs4{:,1});            % prob solution (new IC - with data)
+% u_para2 = vertcat(fine_trajecs5{:,1});            % parareal sol (new IC)
+% 
+% % PLOTS
+% 
+% % Fig 1: Max absolute errors over succesive iterations 
+% err1(cumsum(cumsum(err1~=0)) == 1) = 0; err1(end,end) = eps; errs2 = max(err1,[],1); 
+% err2(cumsum(cumsum(err2~=0)) == 1) = 0; err2(end,end) = eps; errs3 = max(err2,[],1); 
+% err_para(cumsum(cumsum(err_para~=0)) == 1) = 0; err_para(end,end) = eps; errs_para2 = max(err_para,[],1); 
+% 
+% figure(1)
+% hold on
+% plot((1:k_para),errs_para2(1:k_para),'-or','LineWidth',1.2);
+% plot((1:k),errs2(1:k),'-ob','LineWidth',1.2);
+% plot((1:k2),errs3(1:k2),'--ob','LineWidth',1.2);
+% yline(epsilon,'--k','LineWidth',1.2)
+% xlabel('$k$','Interpreter','latex'); ylabel('Max. absolute error','Interpreter','latex');
+% set(gca,'yscale','log')
+% grid on; box on;
+% xlim([1,max([k,k2,k_para])]); ylim([10^(-8),10^(2)]);
+% xticks((1:max([k,k2,k_para]))); %yticks((0:0.5:5));
+% legend('northeast',{'Parareal','PPODE (no legacy data)','PPODE (legacy data)','Tolerance'})
+% hold off
+% 
+% 
+% % SOLUTION ERRORS: FINE vs. PROBABILISTIC vs. PARAREAL
+% prob_error2 = abs(F_sol2 - u_prob2); prob_error2(prob_error2==0) = 10^(-40);
+% prob_error3 = abs(F_sol2 - u_prob3); prob_error3(prob_error3==0) = 10^(-40);
+% para_error2 = abs(F_sol2 - u_para2); para_error2(para_error2==0) = 10^(-40);
+% 
+% 
+% % Fig 2: Absolute errors of the solutions over time 
+% figure(2)
+% 
+% subplot(2,1,1)
+% hold on
+% plot(t_fine,para_error2(:,1),'r','LineWidth',1.2)
+% plot(t_fine,prob_error2(:,1),'b','LineWidth',1.2)
+% plot(t_fine,prob_error3(:,1),'--b','LineWidth',1.2)
+% hold off
+% %set(gca,'xtick',[])
+% yticks(10.^[-15,-10,-5,0])
+% set(gca,'yscale','log')
+% ylim([10^(-15) 10^(0)]);
+% xlabel('$t$','interpreter','latex'); ylabel('$u_1$ error','interpreter','latex');
+% box on; grid on;
+% 
+% subplot(2,1,2)
+% hold on
+% plot(t_fine,para_error2(:,2),'r','LineWidth',1.2)
+% plot(t_fine,prob_error2(:,2),'b','LineWidth',1.2)
+% plot(t_fine,prob_error3(:,2),'--b','LineWidth',1.2)
+% hold off
+% %set(gca,'xtick',[])
+% yticks(10.^[-15,-10,-5,0])
+% set(gca,'yscale','log')
+% ylim([10^(-15) 10^(0)]);
+% xlabel('$t$','interpreter','latex'); ylabel('$u_2$ error','interpreter','latex');
+% box on; grid on;
+% legend('northeast',{'Fine - Parareal','Fine - PPODE (no legacy data)','Fine - PPODE (legacy data)','Tolerance'})
+% 
+
+%% SECTION FOUR: Solve system for various ICs (heat maps)
+% This section runs PPODE and parareal over many initial values to compare
+% convergence rates in two heat maps. WARNING: takes around 30 mins to run
+% on a 4-core machine.
+
+clear; close all; clc;
+
+% INPUTS
+f = @(t,u)([u(2);...
+    (-1/(2 - cos(u(1)-u(3))^2))*((u(2)^2)*cos(u(1)-u(3))*sin(u(1)-u(3)) + (u(4)^2)*sin(u(1)-u(3)) + 2*sin(u(1)) - cos(u(1)-u(3))*sin(u(3)) );...
+    u(4);...
+    (-1/(2 - cos(u(1)-u(3))^2))*(-2*(u(2)^2)*sin(u(1)-u(3)) - (u(4)^2)*sin(u(1)-u(3))*cos(u(1)-u(3)) - 2*cos(u(1)-u(3))*sin(u(1)) + 2*sin(u(3)) )]);    
+
+tspan = [0,80];                      %time interval
+N = 32;                             %no. of time sub-intervals steps
+Ng = 3072;                            %no. of coarse steps
+Nf = Ng*7000000;                      %no. of fine steps
+epsilon = 10^(-6);                    %error tolerance 
+G = 'RK1';                            %coarse solver
+F = 'RK8';                            %fine solver
+
+%fine solve
+dt = (tspan(2)-tspan(1))/Nf;            % size of fine time step
+t_fine = (tspan(1):dt:tspan(end));      % fine time step mesh
+
+
+kernel = struct('func',@isoSE_cov,'theta',[1,1],'jitter',1e-12);
+
+% set of ICs to run
+u1 = linspace(-2.5,2.5,11);
+u2 = linspace(2.5,-2.5,11);
+
+%store convergence rates for each simulation
+k_GParareal = zeros(length(u2),length(u1));
+k_para = k_GParareal;
+turn = k_GParareal;
+
+% find each convergence rate (GParareal)
+for i = 1:length(u2)
+    for j = 1:length(u1)
+        [~,u,~,k,~,~,~,~] = GParareal(f,tspan,[u1(j),0,u2(i),0],N,Ng,Nf,epsilon,F,G,kernel);
+        k_GParareal(i,j) = k;
+        if sum(([u(:,end-3),u(:,end-1)] > pi),'all') ~= 0
+            turn(i,j) = 1;
+        end
+    end
+end
+save('DP_heatmap.mat')
+
+
+% find each convergence rate (parareal)
+for i = 1:length(u2)
+    for j = 1:length(u1)
+        [~,~,~,k] = parareal(f,tspan,[u1(j),0,u2(i),0],N,Ng,Nf,epsilon,F,G);
+        k_para(i,j) = k;
+    end
+end
+save('DP_heatmap.mat')
+
+%% SECTION: Plot the heat maps (from sec 5)
+
+clear; close all; clc
+
+load('DP_heatmap.mat')
+
+%fix colormap
+B = jet;
+
+%plot the heatmap (GParareal)
+figure(1)
+h1 = heatmap(u1,u2,k_GParareal);
+%h1.ColorLimits = [2,6];
+colormap(B)
+colorbar off
+h1.XLabel = '$u_1(t=0)$';
+h1.YLabel = '$u_2(t=0)$';
+h1.NodeChildren(3).XAxis.Label.Interpreter = 'latex';
+h1.NodeChildren(3).YAxis.Label.Interpreter = 'latex';
+
+
+%plot the heatmap (parareal)
+figure(2)
+h2 = heatmap(u1,u2,k_para);
+%h2.ColorLimits = [10,15];
+colormap(B)
+colorbar off
+h2.XLabel = '$u_1(t=0)$';
+h2.YLabel = '$u_2(t=0)$';
+h2.NodeChildren(3).XAxis.Label.Interpreter = 'latex';
+h2.NodeChildren(3).YAxis.Label.Interpreter = 'latex';
+
+%plot the heatmap (parareal)
+figure(3)
+h2 = heatmap(u1,u2,k_para-k_GParareal);
+%h2.ColorLimits = [10,15];
+colormap(B)
+colorbar off
+h2.XLabel = '$u_1(t=0)$';
+h2.YLabel = '$u_2(t=0)$';
+h2.NodeChildren(3).XAxis.Label.Interpreter = 'latex';
+h2.NodeChildren(3).YAxis.Label.Interpreter = 'latex';
+
+%% SECTION: ANIMATION
+
+clear; close all; clc;
+
+load('animated_sols.mat')
+
+% plot the solutions in phase space
+figure(1)
+animate(t_fine,F_sol,u_para,u_prob)
+
+
+
+%% SECTION: Tabulate the HPC results (test 1)
+
+clear; close all; clc;
+
+res = cell(8,17);
+res(1,:) = {'J','kgpara','kpara','Tg','Tf','Tgp','Tser','Tpara','Tgpara','Spara','Sgpara','Tpara','Tgpara','Spara','Sgpara','Epara','Egpara'};
+% res(2,6:8) = {'Actual'};
+res(2,12:15) = {'Theory'};
+res(3:end,1) = {'32','64','128','256','512','1024'};
+
+
+load('GP_DP_N32.mat')
+i = 3;
+res{i,2} = k;
+
+res{i,4} = T{1};
+res{i,5} = T{2};
+res{i,6} = max(sum(T{3},1));
+res{i,7} = N*T{2};
+res{i,8} = 85420.63;          % Tpara (manual)
+res{i,9} = 87574.41;          % Tgpara (manual)
+res{i,10} = res{i,7}/res{i,8};
+res{i,11} = res{i,7}/res{i,9};
+
+res{i,13} = k*T{2} + (k+1)*(N - (k/2))*T{1} + k*max(sum(T{3},1));
+
+res{i,15} = 1/((k/N) + (k+1)*(1 - (k/(2*N)))*(T{1}/T{2}) + (k/N)*(max(sum(T{3},1))/T{2}));
+res{i,17} = res{i,11}/res{i,15};
+
+load('P_DP_N32.mat')
+res{i,3} = k_para;
+res{i,12} = k_para*T{2} + (k_para+1)*(N - (k_para/2))*T{1};
+res{i,14} = 1/((k_para/N) + (k_para+1)*(1 - (k_para/(2*N)))*(T{1}/T{2}));
+res{i,16} = res{i,10}/res{i,14};
+
+
+load('GP_DP_N64.mat')
+i = 4;
+res{i,2} = k;
+
+res{i,4} = T{1};
+res{i,5} = T{2};
+res{i,6} = max(sum(T{3},1));
+res{i,7} = N*T{2};
+res{i,8} = 40474.42;          % Tpara (manual)
+res{i,9} = 46664.10;          % Tgpara (manual)
+res{i,10} = res{i,7}/res{i,8};
+res{i,11} = res{i,7}/res{i,9};
+
+res{i,13} = k*T{2} + (k+1)*(N - (k/2))*T{1} + k*max(sum(T{3},1));
+
+res{i,15} = 1/((k/N) + (k+1)*(1 - (k/(2*N)))*(T{1}/T{2}) + (k/N)*(max(sum(T{3},1))/T{2}));
+res{i,17} = res{i,11}/res{i,15};
+
+load('P_DP_N64.mat')
+res{i,3} = k_para;
+res{i,12} = k_para*T{2} + (k_para+1)*(N - (k_para/2))*T{1};
+res{i,14} = 1/((k_para/N) + (k_para+1)*(1 - (k_para/(2*N)))*(T{1}/T{2}));
+res{i,16} = res{i,10}/res{i,14};
+
+
+load('GP_DP_N128.mat')
+i = 5;
+res{i,2} = k;
+
+res{i,4} = T{1};
+res{i,5} = T{2};
+res{i,6} = max(sum(T{3},1));
+res{i,7} = N*T{2};
+res{i,8} = 22844.22;          % Tpara (manual)
+res{i,9} = 24080.70;          % Tgpara (manual)
+res{i,10} = res{i,7}/res{i,8};
+res{i,11} = res{i,7}/res{i,9};
+
+res{i,13} = k*T{2} + (k+1)*(N - (k/2))*T{1} + k*max(sum(T{3},1));
+
+res{i,15} = 1/((k/N) + (k+1)*(1 - (k/(2*N)))*(T{1}/T{2}) + (k/N)*(max(sum(T{3},1))/T{2}));
+res{i,17} = res{i,11}/res{i,15};
+
+load('P_DP_N128.mat')
+res{i,3} = k_para;
+res{i,12} = k_para*T{2} + (k_para+1)*(N - (k_para/2))*T{1};
+res{i,14} = 1/((k_para/N) + (k_para+1)*(1 - (k_para/(2*N)))*(T{1}/T{2}));
+res{i,16} = res{i,10}/res{i,14};
+
+
+
+load('GP_DP_N256.mat')
+i = 6;
+res{i,2} = k;
+
+res{i,4} = T{1};
+res{i,5} = T{2};
+res{i,6} = max(sum(T{3},1));
+res{i,7} = N*T{2};
+res{i,8} = 10841.18;          % Tpara (manual)
+res{i,9} = 14319.32;          % Tgpara (manual)
+res{i,10} = res{i,7}/res{i,8};
+res{i,11} = res{i,7}/res{i,9};
+
+res{i,13} = k*T{2} + (k+1)*(N - (k/2))*T{1} + k*max(sum(T{3},1));
+
+res{i,15} = 1/((k/N) + (k+1)*(1 - (k/(2*N)))*(T{1}/T{2}) + (k/N)*(max(sum(T{3},1))/T{2}));
+res{i,17} = res{i,11}/res{i,15};
+
+load('P_DP_N256.mat')
+res{i,3} = k_para;
+res{i,12} = k_para*T{2} + (k_para+1)*(N - (k_para/2))*T{1};
+res{i,14} = 1/((k_para/N) + (k_para+1)*(1 - (k_para/(2*N)))*(T{1}/T{2}));
+res{i,16} = res{i,10}/res{i,14};
+
+
+
+
+load('GP_DP_N512.mat')
+i = 7;
+res{i,2} = k;
+
+res{i,4} = T{1};
+res{i,5} = T{2};
+res{i,6} = max(sum(T{3},1));
+res{i,7} = N*T{2};
+res{i,8} = 4960.10;          % Tpara (manual)
+res{i,9} = 24857.46;          % Tgpara (manual)
+res{i,10} = res{i,7}/res{i,8};
+res{i,11} = res{i,7}/res{i,9};
+
+res{i,13} = k*T{2} + (k+1)*(N - (k/2))*T{1} + k*max(sum(T{3},1));
+
+res{i,15} = 1/((k/N) + (k+1)*(1 - (k/(2*N)))*(T{1}/T{2}) + (k/N)*(max(sum(T{3},1))/T{2}));
+res{i,17} = res{i,11}/res{i,15};
+
+load('P_DP_N512.mat')
+res{i,3} = k_para;
+res{i,12} = k_para*T{2} + (k_para+1)*(N - (k_para/2))*T{1};
+res{i,14} = 1/((k_para/N) + (k_para+1)*(1 - (k_para/(2*N)))*(T{1}/T{2}));
+res{i,16} = res{i,10}/res{i,14};
+
+
+
+
+% load('GP_DP_N1024.mat')
+% i = 8;
+% res{i,2} = k;
+% 
+% res{i,4} = T{1};
+% res{i,5} = T{2};
+% res{i,6} = max(sum(T{3},1));
+% res{i,7} = N*T{2};
+% res{i,8} = 2635.57;          % Tpara (manual)
+% res{i,9} = 24080.70;          % Tgpara (manual)
+% res{i,10} = res{i,7}/res{i,8};
+% res{i,11} = res{i,7}/res{i,9};
+% 
+% res{i,13} = k*T{2} + (k+1)*(N - (k/2))*T{1} + k*max(sum(T{3},1));
+% 
+% res{i,15} = 1/((k/N) + (k+1)*(1 - (k/(2*N)))*(T{1}/T{2}) + (k/N)*(max(sum(T{3},1))/T{2}));
+% res{i,17} = res{i,11}/res{i,15};
+% 
+% load('P_DP_N1024.mat')
+% res{i,3} = k_para;
+% res{i,12} = k_para*T{2} + (k_para+1)*(N - (k_para/2))*T{1};
+% res{i,14} = 1/((k_para/N) + (k_para+1)*(1 - (k_para/(2*N)))*(T{1}/T{2}));
+res{i,16} = res{i,10}/res{i,14};
+
+
+
+res
+
+
+% PLOTS
+
+% J vs. wallclock time?
+
+% figure(1)
+% set(gca,'fontsize',12)
+% hold on
+% plot(log2([32,64,128]),log2([res{3,8},res{4,8},res{5,8}]),'-or','LineWidth',1.2);
+% plot(log2([32,64,128]),log2([res{3,9},res{4,9},res{5,9}]),'-ob','LineWidth',1.2);
+% plot(log2([32,64,128]),log2([res{3,7},res{4,7},res{5,7}]),'-ok','LineWidth',1.2);
+% 
+% xlabel('$J$','Interpreter','latex'); ylabel('$\log_2$(wallclock time)','Interpreter','latex');
+% xticks((0:10)); xticklabels(2.^(0:10)); xlim([4.9 10])
+% % ylim([6.5 14.5])
+% grid on; box on;
+% legend({'Parareal','GParareal','Fine Solver'},'interpreter','latex','location','southwest')
+% hold off
+% 
+% axes('Position',[.445 .58 .43 .31]);
+% set(gca,'fontsize',12)
+% hold on
+% plot(log2([32,64,128]),[res{3,10},res{4,10},res{5,10}],'-or','LineWidth',1.2);
+% plot(log2([32,64,128]),[res{3,11},res{4,11},res{5,11}],'-ob','LineWidth',1.2);
+% plot(log2([32 128]),[1 1],'--k','LineWidth',1.2)
+% xlabel('$J$','interpreter','latex'); ylabel('Speedup','interpreter','latex');
+% xticks((0:10)); xticklabels(2.^(0:10)); xlim([4.9 10])
+% ylim([0 11]); yticks((0:2:12))
+% xticklabels(2.^(0:6))
+% grid on; box on;
+% hold off
+
+
+figure(2)
+set(gca,'fontsize',12)
+hold on
+plot(log2([32,64,128,256,512]),log2([res{3,8},res{4,8},res{5,8},res{6,8},res{7,8}]),'-or','LineWidth',1.2);
+plot(log2([32,64,128,256,512]),log2([res{3,12},res{4,12},res{5,12},res{6,12},res{7,12}]),'--or','LineWidth',1.2);
+plot(log2([32,64,128,256,512]),log2([res{3,9},res{4,9},res{5,9},res{6,9},res{7,9}]),'-ob','LineWidth',1.2);
+plot(log2([32,64,128,256,512]),log2([res{3,13},res{4,13},res{5,13},res{6,13},res{7,13}]),'--ob','LineWidth',1.2);
+plot(log2([32,64,128,256,512]),log2([res{3,7},res{4,7},res{5,7},res{6,7},res{7,7}]),'-ok','LineWidth',1.2);
+xlabel('$J$','Interpreter','latex'); ylabel('$\log_2$(wallclock time)','Interpreter','latex');
+xticks((5:10)); xticklabels(2.^(5:10)); xlim([5 10])
+ylim([12 18])
+grid on; box on;
+legend({'Parareal (numerical)','Parareal (theory)','GParareal (numerical)','GParareal (theory)','Fine Solver'},'interpreter','latex','location','southwest')
+hold off
+
+figure(3)
+set(gca,'fontsize',12)
+hold on
+plot(log2([32,64,128,256,512]),[res{3,10},res{4,10},res{5,10},res{6,10},res{7,10}],'-or','LineWidth',1.2);
+plot(log2([32,64,128,256,512]),[res{3,14},res{4,14},res{5,14},res{6,14},res{7,14}],'--or','LineWidth',1.2);
+plot(log2([32,64,128,256,512]),[res{3,11},res{4,11},res{5,11},res{6,11},res{7,11}],'-ob','LineWidth',1.2);
+plot(log2([32,64,128,256,512]),[res{3,15},res{4,15},res{5,15},res{6,15},res{7,15}],'--ob','LineWidth',1.2);
+plot(log2([32 1024]),[1 1],'--k','LineWidth',1.2)
+xlabel('$J$','interpreter','latex'); ylabel('Speedup','interpreter','latex');
+xticks((5:10)); xticklabels(2.^(5:10)); xlim([5 10])
+ylim([0 25]); yticks((0:5:25))
+grid on; box on;
+legend({'Parareal (numerical)','Parareal (theory)','GParareal (numerical)','GParareal (theory)','Fine Solver'},'interpreter','latex','location','northwest')
+hold off
+
+
+
+
+%% SECTION: Tabulate the HPC results (test 2)
+
+clear; close all; clc;
+
+res = cell(8,17);
+res(1,:) = {'J','kgpara','kpara','Tg','Tf','Tgp','Tser','Tpara','Tgpara','Spara','Sgpara','Tpara','Tgpara','Spara','Sgpara','Epara','Egpara'};
+% res(2,6:8) = {'Actual'};
+res(2,12:15) = {'Theory'};
+res(3:end,1) = {'32','64','128','256','512','1024'};
+
+
+load('GP_DP_N32.mat')
+i = 3;
+res{i,2} = k;
+
+res{i,4} = T{1};
+res{i,5} = T{2};
+res{i,6} = sum(T{3},'all'); %max(sum(T{3},1));
+res{i,7} = N*T{2};
+res{i,8} = 130803.82;          % Tpara (manual)
+res{i,9} = 121019.99;          % Tgpara (manual)
+res{i,10} = res{i,7}/res{i,8};
+res{i,11} = res{i,7}/res{i,9};
+
+res{i,13} = k*T{2} + (k+1)*(N - (k/2))*T{1} + res{i,6};
+res{i,15} = 1/((k/N) + (k+1)*(1 - (k/(2*N)))*(T{1}/T{2}) + (1/(N*T{2}))*res{i,6});
+res{i,17} = res{i,11}/res{i,15};
+
+load('P_DP_N32.mat')
+res{i,3} = k_para;
+res{i,12} = k_para*T{2} + (k_para+1)*(N - (k_para/2))*T{1};
+res{i,14} = 1/((k_para/N) + (k_para+1)*(1 - (k_para/(2*N)))*(T{1}/T{2}));
+res{i,16} = res{i,10}/res{i,14};
+
+
+load('GP_DP_N64.mat')
+i = 4;
+res{i,2} = k;
+
+res{i,4} = T{1};
+res{i,5} = T{2};
+res{i,6} = sum(T{3},'all'); %max(sum(T{3},1));
+res{i,7} = N*T{2};
+res{i,8} = 62875.16;          % Tpara (manual)
+res{i,9} = 70023.60;          % Tgpara (manual)
+res{i,10} = res{i,7}/res{i,8};
+res{i,11} = res{i,7}/res{i,9};
+
+res{i,13} = k*T{2} + (k+1)*(N - (k/2))*T{1} + res{i,6};
+res{i,15} = 1/((k/N) + (k+1)*(1 - (k/(2*N)))*(T{1}/T{2}) + (1/(N*T{2}))*res{i,6});
+res{i,17} = res{i,11}/res{i,15};
+
+load('P_DP_N64.mat')
+res{i,3} = k_para;
+res{i,12} = k_para*T{2} + (k_para+1)*(N - (k_para/2))*T{1};
+res{i,14} = 1/((k_para/N) + (k_para+1)*(1 - (k_para/(2*N)))*(T{1}/T{2}));
+res{i,16} = res{i,10}/res{i,14};
+
+
+load('GP_DP_N128.mat')
+i = 5;
+res{i,2} = k;
+
+res{i,4} = T{1};
+res{i,5} = T{2};
+res{i,6} = sum(T{3},'all'); %max(sum(T{3},1));
+res{i,7} = N*T{2};
+res{i,8} = 38523.35;          % Tpara (manual)
+res{i,9} = 35587.74;          % Tgpara (manual)
+res{i,10} = res{i,7}/res{i,8};
+res{i,11} = res{i,7}/res{i,9};
+
+res{i,13} = k*T{2} + (k+1)*(N - (k/2))*T{1} + res{i,6};
+res{i,15} = 1/((k/N) + (k+1)*(1 - (k/(2*N)))*(T{1}/T{2}) + (1/(N*T{2}))*res{i,6});
+res{i,17} = res{i,11}/res{i,15};
+
+load('P_DP_N128.mat')
+res{i,3} = k_para;
+res{i,12} = k_para*T{2} + (k_para+1)*(N - (k_para/2))*T{1};
+res{i,14} = 1/((k_para/N) + (k_para+1)*(1 - (k_para/(2*N)))*(T{1}/T{2}));
+res{i,16} = res{i,10}/res{i,14};
+
+
+
+load('GP_DP_N256.mat')
+i = 6;
+res{i,2} = k;
+
+res{i,4} = T{1};
+res{i,5} = T{2};
+res{i,6} = sum(T{3},'all'); %max(sum(T{3},1));
+res{i,7} = N*T{2};
+res{i,8} = 16619.54;          % Tpara (manual)
+res{i,9} = 20447.92;          % Tgpara (manual)
+res{i,10} = res{i,7}/res{i,8};
+res{i,11} = res{i,7}/res{i,9};
+
+res{i,13} = k*T{2} + (k+1)*(N - (k/2))*T{1} + res{i,6};
+res{i,15} = 1/((k/N) + (k+1)*(1 - (k/(2*N)))*(T{1}/T{2}) + (1/(N*T{2}))*res{i,6});
+res{i,17} = res{i,11}/res{i,15};
+
+load('P_DP_N256.mat')
+res{i,3} = k_para;
+res{i,12} = k_para*T{2} + (k_para+1)*(N - (k_para/2))*T{1};
+res{i,14} = 1/((k_para/N) + (k_para+1)*(1 - (k_para/(2*N)))*(T{1}/T{2}));
+res{i,16} = res{i,10}/res{i,14};
+
+
+
+
+load('GP_DP_N512.mat')
+i = 7;
+res{i,2} = k;
+
+res{i,4} = T{1};
+res{i,5} = T{2};
+res{i,6} = sum(T{3},'all'); %max(sum(T{3},1));
+res{i,7} = N*T{2};
+res{i,8} = 7581.04;          % Tpara (manual)
+res{i,9} = 22522.73;          % Tgpara (manual)
+res{i,10} = res{i,7}/res{i,8};
+res{i,11} = res{i,7}/res{i,9};
+
+res{i,13} = k*T{2} + (k+1)*(N - (k/2))*T{1} + res{i,6};
+res{i,15} = 1/((k/N) + (k+1)*(1 - (k/(2*N)))*(T{1}/T{2}) + (1/(N*T{2}))*res{i,6});
+res{i,17} = res{i,11}/res{i,15};
+
+load('P_DP_N512.mat')
+res{i,3} = k_para;
+res{i,12} = k_para*T{2} + (k_para+1)*(N - (k_para/2))*T{1};
+res{i,14} = 1/((k_para/N) + (k_para+1)*(1 - (k_para/(2*N)))*(T{1}/T{2}));
+res{i,16} = res{i,10}/res{i,14};
+
+
+
+
+
+
+
+res
+
+
+% PLOTS
+
+% J vs. wallclock time?
+
+% figure(1)
+% set(gca,'fontsize',12)
+% hold on
+% plot(log2([32,64,128]),log2([res{3,8},res{4,8},res{5,8}]),'-or','LineWidth',1.2);
+% plot(log2([32,64,128]),log2([res{3,9},res{4,9},res{5,9}]),'-ob','LineWidth',1.2);
+% plot(log2([32,64,128]),log2([res{3,7},res{4,7},res{5,7}]),'-ok','LineWidth',1.2);
+% 
+% xlabel('$J$','Interpreter','latex'); ylabel('$\log_2$(wallclock time)','Interpreter','latex');
+% xticks((0:10)); xticklabels(2.^(0:10)); xlim([4.9 10])
+% % ylim([6.5 14.5])
+% grid on; box on;
+% legend({'Parareal','GParareal','Fine Solver'},'interpreter','latex','location','southwest')
+% hold off
+% 
+% axes('Position',[.445 .58 .43 .31]);
+% set(gca,'fontsize',12)
+% hold on
+% plot(log2([32,64,128]),[res{3,10},res{4,10},res{5,10}],'-or','LineWidth',1.2);
+% plot(log2([32,64,128]),[res{3,11},res{4,11},res{5,11}],'-ob','LineWidth',1.2);
+% plot(log2([32 128]),[1 1],'--k','LineWidth',1.2)
+% xlabel('$J$','interpreter','latex'); ylabel('Speedup','interpreter','latex');
+% xticks((0:10)); xticklabels(2.^(0:10)); xlim([4.9 10])
+% ylim([0 11]); yticks((0:2:12))
+% xticklabels(2.^(0:6))
+% grid on; box on;
+% hold off
+
+
+figure(2)
+set(gca,'fontsize',12)
+hold on
+plot(log2([32,64,128,256,512]),log2([res{3,12},res{4,12},res{5,12},res{6,12},res{7,12}]),'-*r','LineWidth',1.2);
+plot(log2([32,64,128,256,512]),log2([res{3,8},res{4,8},res{5,8},res{6,8},res{7,8}]),'--or','LineWidth',1.2);
+plot(log2([32,64,128,256,512]),log2([res{3,13},res{4,13},res{5,13},res{6,13},res{7,13}]),'-*b','LineWidth',1.2);
+plot(log2([32,64,128,256,512]),log2([res{3,9},res{4,9},res{5,9},res{6,9},res{7,9}]),'--ob','LineWidth',1.2);
+plot(log2([32,64,128,256,512]),log2([res{3,7},res{4,7},res{5,7},res{6,7},res{7,7}]),'--ok','LineWidth',1.2);
+xlabel('$J$','Interpreter','latex'); ylabel('$\log_2$(wallclock time)','Interpreter','latex');
+xticks((5:10)); xticklabels(2.^(5:10)); xlim([5 9])
+ylim([12 18])
+grid on; box on;
+legend({'Parareal (theory)','Parareal (numerical)','GParareal (theory)','GParareal (numerical)','Fine Solver (numerical)'},'interpreter','latex','location','southwest')
+hold off
+
+figure(3)
+set(gca,'fontsize',12)
+hold on
+plot(log2([32,64,128,256,512]),[res{3,14},res{4,14},res{5,14},res{6,14},res{7,14}],'-*r','LineWidth',1.2);
+plot(log2([32,64,128,256,512]),[res{3,10},res{4,10},res{5,10},res{6,10},res{7,10}],'--or','LineWidth',1.2);
+plot(log2([32,64,128,256,512]),[res{3,15},res{4,15},res{5,15},res{6,15},res{7,15}],'-*b','LineWidth',1.2);
+plot(log2([32,64,128,256,512]),[res{3,11},res{4,11},res{5,11},res{6,11},res{7,11}],'--ob','LineWidth',1.2);
+plot(log2([32 1024]),[1 1],'--k','LineWidth',1.2)
+xlabel('$J$','interpreter','latex'); ylabel('Speedup','interpreter','latex');
+xticks((5:10)); xticklabels(2.^(5:10)); xlim([5 9])
+ylim([0 30]); yticks((0:5:25))
+grid on; box on;
+legend({'Parareal (theory)','Parareal (numerical)','GParareal (theory)','GParareal (numerical)','Fine Solver'},'interpreter','latex','location','northwest')
+hold off
+
+
+
+
